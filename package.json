@@ -11,6 +11,7 @@
   "scripts": {
     "start": "tsx --env-file=.env src/agent.ts",
     "notify": "tsx --env-file=.env scripts/notify.ts",
+    "chat": "tsx --env-file=.env scripts/chat.ts",
     "tail": "tail -F logs/*.log"
   },
   "dependencies": {
