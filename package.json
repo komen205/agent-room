@@ -1,0 +1,26 @@
+{
+  "name": "agent-room",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Multi-agent coordination over Ably Chat, each agent running as a separate Claude Code CLI subprocess.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/komen205/agent-room.git"
+  },
+  "scripts": {
+    "start": "tsx --env-file=.env src/agent.ts",
+    "notify": "tsx --env-file=.env scripts/notify.ts",
+    "tail": "tail -F logs/*.log"
+  },
+  "dependencies": {
+    "@ably/chat": "^0.13.0",
+    "ably": "^2.6.0",
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

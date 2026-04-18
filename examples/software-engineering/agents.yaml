@@ -1,0 +1,40 @@
+# Example campaign: four agents optimising a public open-source codebase.
+#
+# Target: a Node/TypeScript repo you have cloned locally (e.g. expressjs/express).
+# Replace the cwd paths below with your local clone path before running.
+#
+# Roles:
+#   reviewer       — prioritises work, reviews PRs, sets assignments. Uses NOOP to stay silent.
+#   implementer-a  — ships PRs focused on the core library (src/).
+#   implementer-b  — ships PRs focused on tests / benchmarks / examples.
+#   scout          — scans the codebase for new optimisation candidates, files findings
+#                    in campaign/scout-findings/inbox/ for the reviewer to triage.
+
+room: agent-room-se-example
+
+agents:
+  reviewer:
+    kind: reviewer
+    cwd: /REPLACE/WITH/ABSOLUTE/PATH/TO/target-repo
+    nextSpeaker: sender
+    systemPromptFile: prompts/reviewer.system.md
+    openerPromptFile: prompts/reviewer.opener.md
+
+  implementer-a:
+    kind: executor
+    cwd: /REPLACE/WITH/ABSOLUTE/PATH/TO/target-repo
+    nextSpeaker: implementer-b
+    systemPromptFile: prompts/implementer-a.system.md
+
+  implementer-b:
+    kind: executor
+    cwd: /REPLACE/WITH/ABSOLUTE/PATH/TO/target-repo
+    nextSpeaker: implementer-a
+    systemPromptFile: prompts/implementer-b.system.md
+
+  scout:
+    kind: scout
+    cwd: /REPLACE/WITH/ABSOLUTE/PATH/TO/target-repo
+    nextSpeaker: reviewer
+    systemPromptFile: prompts/scout.system.md
+    openerPromptFile: prompts/scout.opener.md
