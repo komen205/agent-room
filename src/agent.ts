@@ -54,6 +54,10 @@ export type TraceEvent =
   | { kind: 'tool'; name: string; input: string }
   | { kind: 'thinking'; text: string };
 
+// Exposed so the subscribe handler can kill it when the operator
+// sends an interrupt-prefixed ('!') message while the agent is busy.
+let currentProc: ReturnType<typeof spawn> | null = null;
+
 function ask(
   incoming: string,
   currentRole: Role,
@@ -74,6 +78,7 @@ function ask(
       cwd: currentRole.cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    currentProc = proc;
     let buffer = '';
     let finalResult = '';
 
@@ -120,11 +125,15 @@ function ask(
       process.stderr.write(`[${NAME}·err] ${chunk}`);
     });
 
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
+      if (currentProc === proc) currentProc = null;
       if (code === 0) resolvePromise(finalResult.trim());
-      else rejectPromise(new Error(`claude exited with code ${code}`));
+      else rejectPromise(new Error(`claude exited with code ${code ?? signal}`));
     });
-    proc.on('error', rejectPromise);
+    proc.on('error', (err) => {
+      if (currentProc === proc) currentProc = null;
+      rejectPromise(err);
+    });
   });
 }
 
@@ -210,6 +219,25 @@ async function run() {
   const enqueueOrHandle = (msg: TransportMessage, sourceTag: string) => {
     if (msg.clientId === NAME) return; // drop self
 
+    // Operator interrupt: a message starting with '!' kills the in-flight
+    // claude subprocess so the operator instruction is processed next turn.
+    // The leading '!' is stripped before the message enters the queue.
+    const isInterrupt =
+      msg.clientId === 'operator' && msg.text.trim().startsWith('!');
+    if (isInterrupt) {
+      const stripped = msg.text.trim().replace(/^!\s*/, '');
+      msg = { ...msg, text: stripped };
+      if (busy && currentProc && !currentProc.killed) {
+        log('interrupt', `operator '!' prefix → killing subprocess pid=${currentProc.pid}`);
+        currentProc.kill('SIGKILL');
+        // Do not return — fall through to queue the stripped message so it's
+        // processed as soon as the dying subprocess's finally block releases
+        // `busy`.
+      } else {
+        log('interrupt', 'operator used `!` prefix but agent is not busy; handling normally');
+      }
+    }
+
     if (busy) {
       // Queue full? Evict the oldest NON-operator message so priority messages
       // never evict each other. If the whole queue is priority (rare), fall
@@ -225,7 +253,7 @@ async function run() {
       }
       if (msg.clientId === 'operator') {
         queue.unshift(msg);
-        log('queue', `[priority] queued from operator${sourceTag} (depth ${queue.length})`);
+        log('queue', `[priority${isInterrupt ? '+interrupt' : ''}] queued from operator${sourceTag} (depth ${queue.length})`);
       } else {
         queue.push(msg);
         log('queue', `queued from ${msg.clientId}${sourceTag} (depth ${queue.length})`);

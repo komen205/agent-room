@@ -54,7 +54,8 @@ async function main() {
   await transport.connect();
 
   console.log(`${DIM}connected · transport=${kind} · room=${room} · target=${target}${RESET}`);
-  console.log(`${DIM}type a message + Enter to send. /to <name> to retarget. /quit to exit.${RESET}`);
+  console.log(`${DIM}type a message + Enter to send. prefix with '!' to INTERRUPT the agent's current turn.${RESET}`);
+  console.log(`${DIM}/to <name> to retarget. /clear to clear. /quit to exit.${RESET}`);
   console.log('');
 
   transport.subscribe((msg: TransportMessage) => {
