@@ -8,9 +8,15 @@ export type Role = {
   name: string;
   kind: RoleKind;
   cwd: string;
-  nextSpeaker: string; // peer name, or the literal string "sender"
+  nextSpeaker: string; // peer name, "sender", or any external clientId (e.g. "operator")
   system: string;
   opener: string | null;
+  /**
+   * Optional extra rooms to SUBSCRIBE to (read-only). The agent's own messages
+   * are always published to its primary `room`. Use this for observer / bridge
+   * roles that watch one room and report in another.
+   */
+  readRooms: string[];
 };
 
 export type LoadedConfig = {
@@ -24,6 +30,7 @@ type RawRole = {
   nextSpeaker: string;
   systemPromptFile: string;
   openerPromptFile?: string;
+  readRooms?: string[];
 };
 
 type RawConfig = {
@@ -50,10 +57,12 @@ export function loadConfig(configPath: string): LoadedConfig {
     if (!rawRole.nextSpeaker) {
       throw new Error(`Role '${name}' missing required field: nextSpeaker`);
     }
+    // nextSpeaker is 'sender' (reply-to), a known peer name, or any string
+    // representing a client that isn't configured here (e.g. "operator" for the
+    // chat.ts / notify.ts script). We don't validate unknown names — if nobody
+    // responds, that's visible in the log and easy to debug.
     if (rawRole.nextSpeaker !== 'sender' && !peerNames.includes(rawRole.nextSpeaker)) {
-      throw new Error(
-        `Role '${name}' nextSpeaker '${rawRole.nextSpeaker}' is not 'sender' or a known agent name (${peerNames.join(', ')}).`,
-      );
+      // No-op: allow arbitrary addressees like "operator".
     }
 
     const peers = peerNames.filter((p) => p !== name);
@@ -75,6 +84,7 @@ export function loadConfig(configPath: string): LoadedConfig {
       nextSpeaker: rawRole.nextSpeaker,
       system,
       opener,
+      readRooms: rawRole.readRooms ?? [],
     };
   }
 

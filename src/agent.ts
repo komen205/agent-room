@@ -181,7 +181,8 @@ Respond as ${NAME}. Follow your system prompt's workflow strictly.`;
 async function run() {
   log('boot', sessionId ? `resuming claude session ${sessionId}` : 'no saved session, will start fresh');
   const transportKind = resolveTransportKind();
-  log('boot', `role=${role.kind} transport=${transportKind} room=${ROOM_NAME} cwd=${role.cwd} nextSpeaker=${role.nextSpeaker}`);
+  const readRoomsList = role.readRooms.length ? ` reads=[${role.readRooms.join(',')}]` : '';
+  log('boot', `role=${role.kind} transport=${transportKind} room=${ROOM_NAME}${readRoomsList} cwd=${role.cwd} nextSpeaker=${role.nextSpeaker}`);
 
   const transport = await createTransport({
     kind: transportKind,
@@ -189,6 +190,25 @@ async function run() {
     clientId: NAME,
   });
   await transport.connect();
+
+  // Extra read-only subscriptions for rooms the agent observes without publishing.
+  const readOnlyTransports: Array<{ disconnect: () => Promise<void> }> = [];
+  for (const extraRoom of role.readRooms) {
+    const t = await createTransport({ kind: transportKind, room: extraRoom, clientId: NAME });
+    await t.connect();
+    t.subscribe((msg) => {
+      // same handle path as the primary room; replies go out via the primary transport
+      if (busy) {
+        if (queue.length >= 10) queue.shift();
+        queue.push(msg);
+        log('queue', `queued from ${msg.clientId}@${extraRoom} (depth ${queue.length})`);
+        return;
+      }
+      handle(msg).catch((err) => log('err', `handler failed (readRoom ${extraRoom}): ${err}`));
+    });
+    readOnlyTransports.push(t);
+    log('boot', `subscribed to readRoom=${extraRoom}`);
+  }
 
   const listenAll = role.kind === 'reviewer' || role.kind === 'scout';
   const canNoop = role.kind === 'reviewer' || role.kind === 'scout';

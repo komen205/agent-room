@@ -1,0 +1,25 @@
+# Strategist — a reviewer-kind agent that watches a main room read-only
+# and does its own work (tool calls, research, investigation) in a
+# separate primary room. Operator keeps one chat.ts tab per room to see
+# everything without the strategist's activity polluting the main room.
+#
+# Architecture:
+#
+#   [emulator-room]        <- emulator agent + operator chat + strategist (SUB only)
+#   [strategist-room]      <- strategist activity (tool calls, thinking) + operator
+#                             chat #2 + strategist's proposals addressed to operator
+#
+# The strategist NEVER publishes to emulator-room. Operator is the bridge:
+# reads proposals in strategist-room tab, forwards approved ones manually
+# to emulator agent via the emulator-room tab.
+
+room: strategist-room
+
+agents:
+  strategist:
+    kind: reviewer
+    cwd: /Users/nkapi/Documents/GitHub/agent-room
+    nextSpeaker: operator
+    readRooms:
+      - emulator-room
+    systemPromptFile: prompts/strategist.system.md
