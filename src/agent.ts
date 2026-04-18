@@ -191,30 +191,48 @@ async function run() {
   });
   await transport.connect();
 
-  // Extra read-only subscriptions for rooms the agent observes without publishing.
-  const readOnlyTransports: Array<{ disconnect: () => Promise<void> }> = [];
-  for (const extraRoom of role.readRooms) {
-    const t = await createTransport({ kind: transportKind, room: extraRoom, clientId: NAME });
-    await t.connect();
-    t.subscribe((msg) => {
-      // same handle path as the primary room; replies go out via the primary transport
-      if (busy) {
-        if (queue.length >= 10) queue.shift();
-        queue.push(msg);
-        log('queue', `queued from ${msg.clientId}@${extraRoom} (depth ${queue.length})`);
-        return;
-      }
-      handle(msg).catch((err) => log('err', `handler failed (readRoom ${extraRoom}): ${err}`));
-    });
-    readOnlyTransports.push(t);
-    log('boot', `subscribed to readRoom=${extraRoom}`);
-  }
-
   const listenAll = role.kind === 'reviewer' || role.kind === 'scout';
   const canNoop = role.kind === 'reviewer' || role.kind === 'scout';
 
   let busy = false;
   const queue: TransportMessage[] = [];
+
+  /**
+   * Gate every incoming message through this. Two behaviours:
+   *
+   * 1. Drop self-messages at the edge (NATS/Ably deliver our own publishes back
+   *    to us; we never want to queue or handle them). This prevents the agent's
+   *    own trace stream from rolling over the queue every few seconds.
+   * 2. Priority lane for operator messages — they go to the FRONT of the queue
+   *    so human-in-the-loop instructions are processed before any pending
+   *    agent-to-agent chatter.
+   */
+  const enqueueOrHandle = (msg: TransportMessage, sourceTag: string) => {
+    if (msg.clientId === NAME) return; // drop self
+
+    if (busy) {
+      if (queue.length >= 10) queue.shift();
+      if (msg.clientId === 'operator') {
+        queue.unshift(msg);
+        log('queue', `[priority] queued from operator${sourceTag} (depth ${queue.length})`);
+      } else {
+        queue.push(msg);
+        log('queue', `queued from ${msg.clientId}${sourceTag} (depth ${queue.length})`);
+      }
+      return;
+    }
+    handle(msg).catch((err) => log('err', `handler failed${sourceTag}: ${err}`));
+  };
+
+  // Extra read-only subscriptions for rooms the agent observes without publishing.
+  const readOnlyTransports: Array<{ disconnect: () => Promise<void> }> = [];
+  for (const extraRoom of role.readRooms) {
+    const t = await createTransport({ kind: transportKind, room: extraRoom, clientId: NAME });
+    await t.connect();
+    t.subscribe((msg) => enqueueOrHandle(msg, `@${extraRoom}`));
+    readOnlyTransports.push(t);
+    log('boot', `subscribed to readRoom=${extraRoom}`);
+  }
 
   const handle = async (msg: TransportMessage): Promise<void> => {
     const meta = (msg.metadata ?? {}) as { next?: string };
@@ -258,15 +276,7 @@ async function run() {
     }
   };
 
-  transport.subscribe((msg) => {
-    if (busy) {
-      if (queue.length >= 10) queue.shift();
-      queue.push(msg);
-      log('queue', `queued from ${msg.clientId} (depth ${queue.length})`);
-      return;
-    }
-    handle(msg).catch((err) => log('err', `handler failed: ${err}`));
-  });
+  transport.subscribe((msg) => enqueueOrHandle(msg, ''));
 
   if (role.opener) {
     const delayMs = role.kind === 'scout' ? 10000 : 5000;
