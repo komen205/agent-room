@@ -211,7 +211,18 @@ async function run() {
     if (msg.clientId === NAME) return; // drop self
 
     if (busy) {
-      if (queue.length >= 10) queue.shift();
+      // Queue full? Evict the oldest NON-operator message so priority messages
+      // never evict each other. If the whole queue is priority (rare), fall
+      // back to shifting from the front.
+      if (queue.length >= 10) {
+        const nonOperatorIdx = queue.findIndex((m) => m.clientId !== 'operator');
+        if (nonOperatorIdx >= 0) {
+          queue.splice(nonOperatorIdx, 1);
+        } else {
+          queue.shift(); // all priority, drop oldest priority
+          log('queue', `WARN: queue saturated with operator messages, dropping oldest priority`);
+        }
+      }
       if (msg.clientId === 'operator') {
         queue.unshift(msg);
         log('queue', `[priority] queued from operator${sourceTag} (depth ${queue.length})`);
