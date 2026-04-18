@@ -48,7 +48,17 @@ function log(kind: string, text: string) {
   try { appendFileSync(LOG_FILE, line); } catch { /* ignore */ }
 }
 
-function ask(incoming: string, currentRole: Role): Promise<string> {
+export type TraceEvent =
+  | { kind: 'start' }
+  | { kind: 'txt'; text: string }
+  | { kind: 'tool'; name: string; input: string }
+  | { kind: 'thinking'; text: string };
+
+function ask(
+  incoming: string,
+  currentRole: Role,
+  onTrace?: (ev: TraceEvent) => void,
+): Promise<string> {
   return new Promise((resolvePromise, rejectPromise) => {
     const args = [
       '-p', incoming,
@@ -68,6 +78,7 @@ function ask(incoming: string, currentRole: Role): Promise<string> {
     let finalResult = '';
 
     log('start', 'thinking...');
+    onTrace?.({ kind: 'start' });
 
     proc.stdout.on('data', (chunk: Buffer) => {
       buffer += chunk.toString();
@@ -83,9 +94,14 @@ function ask(incoming: string, currentRole: Role): Promise<string> {
             for (const block of msg.message.content) {
               if (block.type === 'text' && block.text) {
                 log('txt', block.text.slice(0, 200));
+                onTrace?.({ kind: 'txt', text: block.text });
               } else if (block.type === 'tool_use') {
-                const input = JSON.stringify(block.input ?? {}).slice(0, 120);
-                log('tool', `${block.name}(${input})`);
+                const input = JSON.stringify(block.input ?? {});
+                log('tool', `${block.name}(${input.slice(0, 120)})`);
+                onTrace?.({ kind: 'tool', name: block.name, input: input.slice(0, 2000) });
+              } else if (block.type === 'thinking' && block.thinking) {
+                log('think', block.thinking.slice(0, 200));
+                onTrace?.({ kind: 'thinking', text: block.thinking });
               }
             }
           }
@@ -196,7 +212,12 @@ async function run() {
     try {
       log('recv', `from ${msg.clientId}: ${msg.text.slice(0, 200)}`);
       const prompt = buildPerTurnPrompt(msg);
-      const reply = await ask(prompt, role);
+      const traceTarget = msg.clientId; // stream trace to whoever pinged us
+      const reply = await ask(prompt, role, (ev) => {
+        publishTrace(transport, traceTarget, ev).catch((err) =>
+          log('err', `trace publish failed: ${err}`),
+        );
+      });
 
       if (canNoop && /^\s*NOOP\s*$/i.test(reply)) {
         log('noop', `silent on ${msg.clientId}'s last message`);
@@ -206,7 +227,7 @@ async function run() {
       turnsTaken++;
       const next = resolveNext(msg);
       log('send', `-> ${next}: ${reply.slice(0, 200)}`);
-      await transport.publish(reply, { next });
+      await transport.publish(reply, { next, kind: 'reply' });
     } finally {
       busy = false;
       const nextEvent = queue.shift();
@@ -231,11 +252,36 @@ async function run() {
     const delayMs = role.kind === 'scout' ? 10000 : 5000;
     await new Promise((r) => setTimeout(r, delayMs));
     log('opener', `running opener prompt (delay=${delayMs}ms)`);
-    const opener = await ask(role.opener, role);
-    turnsTaken++;
     const next = role.kind === 'reviewer' ? 'all' : resolveNext({ clientId: 'system' });
+    const opener = await ask(role.opener, role, (ev) => {
+      publishTrace(transport, next, ev).catch((err) =>
+        log('err', `trace publish failed: ${err}`),
+      );
+    });
+    turnsTaken++;
     log('send', `-> ${next}: ${opener.slice(0, 200)}`);
-    await transport.publish(opener, { next });
+    await transport.publish(opener, { next, kind: 'reply' });
+  }
+}
+
+async function publishTrace(
+  transport: { publish: (text: string, metadata?: { next?: string; [key: string]: unknown }) => Promise<void> },
+  next: string,
+  ev: TraceEvent,
+): Promise<void> {
+  switch (ev.kind) {
+    case 'start':
+      await transport.publish('…thinking', { next, kind: 'start' });
+      return;
+    case 'tool':
+      await transport.publish(`${ev.name}(${ev.input})`, { next, kind: 'tool', tool: ev.name });
+      return;
+    case 'txt':
+      await transport.publish(ev.text, { next, kind: 'txt' });
+      return;
+    case 'thinking':
+      await transport.publish(ev.text, { next, kind: 'thinking' });
+      return;
   }
 }
 

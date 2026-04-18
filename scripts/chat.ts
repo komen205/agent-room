@@ -60,8 +60,30 @@ async function main() {
   transport.subscribe((msg: TransportMessage) => {
     if (msg.clientId === 'operator') return; // don't echo our own sends
     const c = colour(msg.clientId);
+    const kind = (msg.metadata?.kind ?? 'reply') as string;
+    const text = msg.text;
+
+    if (kind === 'start') {
+      console.log(`${DIM}${ts()} ${c}[${msg.clientId}]${RESET} ${DIM}…thinking${RESET}`);
+      return;
+    }
+    if (kind === 'tool') {
+      const toolName = (msg.metadata?.tool as string) ?? 'tool';
+      console.log(`${DIM}${ts()}${RESET} \x1b[90m  ├─ ${c}${toolName}${RESET}\x1b[90m  ${text.slice(toolName.length + 1, 500)}${RESET}`);
+      return;
+    }
+    if (kind === 'txt') {
+      // intermediate text (the agent thinking out loud in a text block before a tool call)
+      console.log(`${DIM}${ts()}${RESET} \x1b[90m  ├─ ${text.slice(0, 300)}${RESET}`);
+      return;
+    }
+    if (kind === 'thinking') {
+      console.log(`${DIM}${ts()}${RESET} \x1b[90m  ├─ 💭 ${text.slice(0, 200)}${RESET}`);
+      return;
+    }
+    // kind === 'reply' (the final message)
     const addressed = msg.metadata?.next ? ` -> ${msg.metadata.next}` : '';
-    console.log(`${DIM}${ts()}${RESET} ${c}[${msg.clientId}${addressed}]${RESET} ${msg.text}`);
+    console.log(`${DIM}${ts()}${RESET} ${c}[${msg.clientId}${addressed}]${RESET} ${text}`);
   });
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
