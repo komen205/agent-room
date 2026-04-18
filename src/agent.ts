@@ -219,6 +219,19 @@ async function run() {
   const enqueueOrHandle = (msg: TransportMessage, sourceTag: string) => {
     if (msg.clientId === NAME) return; // drop self
 
+    // Drop streaming trace events at the edge. Only `kind: 'reply'` (or
+    // messages with no kind, i.e. notify/chat.ts publishes) drive turns.
+    // `tool`, `txt`, `thinking`, `start` are for operator visibility and
+    // should never reach an agent's turn queue.
+    const kind = msg.metadata?.kind as string | undefined;
+    if (kind && kind !== 'reply') return;
+
+    // Drop messages not addressed to us (unless we listen-all). Doing this
+    // at the edge keeps the queue from filling with messages between other
+    // agents that we'd filter in handle() anyway.
+    const nextTarget = msg.metadata?.next as string | undefined;
+    if (!listenAll && nextTarget && nextTarget !== NAME && nextTarget !== 'all') return;
+
     // Operator interrupt: a message starting with '!' kills the in-flight
     // claude subprocess so the operator instruction is processed next turn.
     // The leading '!' is stripped before the message enters the queue.
