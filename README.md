@@ -1,6 +1,12 @@
 # agent-room
 
-A pattern for running multiple Claude-driven agents as **separate OS processes**, coordinating via an [Ably Chat](https://ably.com/docs/chat) room. Each agent is a `claude` CLI subprocess with its own working directory, system prompt, and session memory.
+A pattern for running multiple Claude-driven agents as **separate OS processes**, coordinating via a pluggable message transport. Each agent is a `claude` CLI subprocess with its own working directory, system prompt, and session memory.
+
+Two transports ship out of the box:
+- **[Ably Chat](https://ably.com/docs/chat)** — hosted, free tier covers ~3M msg/month, zero infra.
+- **[NATS](https://nats.io/)** — self-hosted, single container (`docker compose up -d nats`), no external dependency.
+
+Pick one with `TRANSPORT=ably` (default) or `TRANSPORT=nats` in `.env`.
 
 ## Why this exists
 
@@ -45,15 +51,25 @@ Each `claude` subprocess is invoked with:
 - Node 22.16+ (24 recommended)
 - [`claude` CLI](https://docs.claude.com/en/docs/claude-code) installed and logged in (`claude login`)
 - [`gh` CLI](https://cli.github.com/) logged in (only if you want the example's PR flow)
-- A free [Ably](https://ably.com) account — the free tier covers ~3M messages/month.
+- **Either** a free [Ably](https://ably.com) account (hosted, simplest), **or** Docker (to run NATS locally).
 
 ```bash
 git clone https://github.com/komen205/agent-room.git
 cd agent-room
 npm install
 cp .env.example .env
-# edit .env and paste your ABLY_API_KEY
 ```
+
+**For the hosted Ably transport:** set `TRANSPORT=ably` and paste `ABLY_API_KEY=...` in `.env`.
+
+**For the self-hosted NATS transport:** set `TRANSPORT=nats` in `.env`, then:
+```bash
+docker compose up -d nats
+# NATS is now on nats://localhost:4222 (default NATS_URL)
+# Monitoring UI at http://localhost:8222
+```
+
+`NATS_URL`, `NATS_USER`, `NATS_PASS`, and `NATS_TOKEN` env vars are supported for connecting to a remote or authenticated NATS server. See `.env.example`.
 
 **Try the software-engineering example** (4 agents optimising a public codebase):
 
@@ -97,10 +113,15 @@ The `kind` is the only behavioural switch. Personality, mission, tool usage, and
 
 - `src/agent.ts` — the runtime loop (subscribe, ask subprocess, publish, queue, persist session).
 - `src/config.ts` — YAML loader with `{{placeholder}}` substitution in prompts.
-- `scripts/notify.ts` — inject messages from outside the mesh.
+- `src/transport.ts` — transport interface + `createTransport({ kind })` factory.
+- `src/transport/ably.ts` — Ably Chat implementation.
+- `src/transport/nats.ts` — NATS implementation (JSON envelope on subject `agent-room.<roomName>`).
+- `docker-compose.yml` — `docker compose up -d nats` to run NATS locally.
+- `scripts/notify.ts` — inject messages from outside the mesh (works with either transport).
 - `examples/software-engineering/` — example campaign against a public codebase with four agent roles.
 - `docs/architecture.md` — message flow, queue behaviour, session persistence details.
 - `docs/roles.md` — how to define new roles and write good system prompts.
+- `docs/transports.md` — when to pick Ably vs NATS, wire format, auth, running NATS in production.
 - `docs/faq.md` — when to use this vs in-process frameworks; known limitations.
 
 ## Safety

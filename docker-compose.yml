@@ -1,0 +1,14 @@
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: agent-room-nats
+    command: ["-n", "agent-room", "-m", "8222"]
+    ports:
+      - "4222:4222"   # client protocol
+      - "8222:8222"   # http monitoring  http://localhost:8222
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3

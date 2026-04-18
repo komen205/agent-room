@@ -1,13 +1,14 @@
-import * as Ably from 'ably';
-import { ChatClient } from '@ably/chat';
-import type { ChatMessageEvent } from '@ably/chat';
 import { spawn } from 'child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { loadConfig, type Role } from './config.js';
+import { createTransport, resolveTransportKind, type TransportMessage } from './transport.js';
 
-const NAME = process.env.NAME;
-if (!NAME) throw new Error('NAME env var is required');
+const NAME: string = (() => {
+  const n = process.env.NAME;
+  if (!n) throw new Error('NAME env var is required');
+  return n;
+})();
 
 const MAX_TURNS = parseInt(process.env.MAX_TURNS ?? '50', 10);
 const CONFIG_FILE = process.env.CONFIG_FILE ?? 'config/agents.yaml';
@@ -163,24 +164,23 @@ Respond as ${NAME}. Follow your system prompt's workflow strictly.`;
 
 async function run() {
   log('boot', sessionId ? `resuming claude session ${sessionId}` : 'no saved session, will start fresh');
-  log('boot', `role=${role.kind} cwd=${role.cwd} nextSpeaker=${role.nextSpeaker} room=${ROOM_NAME}`);
+  const transportKind = resolveTransportKind();
+  log('boot', `role=${role.kind} transport=${transportKind} room=${ROOM_NAME} cwd=${role.cwd} nextSpeaker=${role.nextSpeaker}`);
 
-  const apiKey = process.env.ABLY_API_KEY;
-  if (!apiKey) throw new Error('ABLY_API_KEY env var is required');
-
-  const realtime = new Ably.Realtime({ key: apiKey, clientId: NAME });
-  const chat = new ChatClient(realtime);
-  const chatRoom = await chat.rooms.get(ROOM_NAME);
-  await chatRoom.attach();
+  const transport = await createTransport({
+    kind: transportKind,
+    room: ROOM_NAME,
+    clientId: NAME,
+  });
+  await transport.connect();
 
   const listenAll = role.kind === 'reviewer' || role.kind === 'scout';
   const canNoop = role.kind === 'reviewer' || role.kind === 'scout';
 
   let busy = false;
-  const queue: ChatMessageEvent[] = [];
+  const queue: TransportMessage[] = [];
 
-  const handle = async (event: ChatMessageEvent): Promise<void> => {
-    const msg = event.message;
+  const handle = async (msg: TransportMessage): Promise<void> => {
     const meta = (msg.metadata ?? {}) as { next?: string };
 
     if (msg.clientId === NAME) return;
@@ -206,7 +206,7 @@ async function run() {
       turnsTaken++;
       const next = resolveNext(msg);
       log('send', `-> ${next}: ${reply.slice(0, 200)}`);
-      await chatRoom.messages.send({ text: reply, metadata: { next } });
+      await transport.publish(reply, { next });
     } finally {
       busy = false;
       const nextEvent = queue.shift();
@@ -217,14 +217,14 @@ async function run() {
     }
   };
 
-  chatRoom.messages.subscribe((event: ChatMessageEvent) => {
+  transport.subscribe((msg) => {
     if (busy) {
       if (queue.length >= 10) queue.shift();
-      queue.push(event);
-      log('queue', `queued from ${event.message.clientId} (depth ${queue.length})`);
+      queue.push(msg);
+      log('queue', `queued from ${msg.clientId} (depth ${queue.length})`);
       return;
     }
-    handle(event).catch((err) => log('err', `handler failed: ${err}`));
+    handle(msg).catch((err) => log('err', `handler failed: ${err}`));
   });
 
   if (role.opener) {
@@ -235,7 +235,7 @@ async function run() {
     turnsTaken++;
     const next = role.kind === 'reviewer' ? 'all' : resolveNext({ clientId: 'system' });
     log('send', `-> ${next}: ${opener.slice(0, 200)}`);
-    await chatRoom.messages.send({ text: opener, metadata: { next } });
+    await transport.publish(opener, { next });
   }
 }
 

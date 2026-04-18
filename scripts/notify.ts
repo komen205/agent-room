@@ -1,5 +1,5 @@
-import * as Ably from 'ably';
-import { ChatClient } from '@ably/chat';
+import { loadConfig } from '../src/config.js';
+import { createTransport, resolveTransportKind } from '../src/transport.js';
 
 const [, , to = 'all', ...rest] = process.argv;
 const text = rest.join(' ');
@@ -9,21 +9,20 @@ if (!text) {
   process.exit(1);
 }
 
-const ROOM_NAME = process.env.ROOM_NAME ?? 'agent-room';
-const API_KEY = process.env.ABLY_API_KEY;
-if (!API_KEY) {
-  console.error('ABLY_API_KEY env var is required');
-  process.exit(1);
-}
-
 async function main() {
-  const realtime = new Ably.Realtime({ key: API_KEY!, clientId: 'operator' });
-  const chat = new ChatClient(realtime);
-  const room = await chat.rooms.get(ROOM_NAME);
-  await room.attach();
-  await room.messages.send({ text, metadata: { next: to } });
-  console.log(`sent -> ${to}: ${text}`);
-  realtime.close();
+  const configFile = process.env.CONFIG_FILE ?? 'config/agents.yaml';
+  const { room } = loadConfig(configFile);
+  const transportKind = resolveTransportKind();
+
+  const transport = await createTransport({
+    kind: transportKind,
+    room,
+    clientId: 'operator',
+  });
+  await transport.connect();
+  await transport.publish(text, { next: to });
+  console.log(`sent (${transportKind}) -> ${to}: ${text}`);
+  await transport.disconnect();
 }
 
 main().catch((err) => {
